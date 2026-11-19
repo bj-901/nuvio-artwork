@@ -1,34 +1,35 @@
 #!/usr/bin/env python3
 """
-Regenerate Nuvio Discover hero backdrops from the live Stremio catalogs.
-The generator reads catalog entries, resolves their metadata backgrounds, and
-composes a dark Violet Platinum collage. It never overwrites a backdrop unless
-it successfully builds a replacement with enough usable images.
+Refresh Nuvio Discover cover cards and hero backdrops from the live Stremio catalogs.
+
+- Cover: portrait-poster collage, no embedded wording.
+- Backdrop: one dominant current title backdrop, subtly blended with supporting
+  title backdrops and Violet Platinum color grading.
+- Logo: static transparent Violet Platinum typography installed separately.
+Existing files are replaced only after a category has enough valid source images.
 """
 from __future__ import annotations
 
-import concurrent.futures
 import io
-import json
 import os
 import random
-import sys
-import time
 from pathlib import Path
 from urllib.parse import urlparse
 
 import requests
-from PIL import Image, ImageDraw, ImageFilter, ImageEnhance, ImageOps
+from PIL import Image, ImageDraw, ImageEnhance, ImageFilter, ImageOps
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DISCOVER_DIR = REPO_ROOT / "Discover"
-WIDTH, HEIGHT = 1920, 1080
-MAX_ITEMS_PER_CATALOG = 24
-MAX_BACKDROPS_PER_CATEGORY = 12
-REQUEST_TIMEOUT = 25
-USER_AGENT = "Nuvio-Discover-Artwork-Generator/1.0"
 
-# Current catalog IDs from the user's existing Nuvio Discover profile.
+COVER_SIZE = (1536, 864)
+BACKDROP_SIZE = (3840, 2160)  # Native 4K UHD output for large TVs
+MAX_ITEMS_PER_CATALOG = 30
+MAX_POSTERS = 15
+MAX_BACKDROPS = 12
+TIMEOUT = 25
+USER_AGENT = "Nuvio-Discover-Artwork-Generator/2.1-4K"
+
 CATEGORY_CATALOGS = {
     "Trending": [("movie", "mdblist.206584"), ("series", "mdblist.207259")],
     "Popular": [("movie", "mdblist.221823"), ("series", "mdblist.221824")],
@@ -42,13 +43,12 @@ CATEGORY_CATALOGS = {
     ],
 }
 
-# Each category receives a slightly different tint while retaining one visual identity.
 ACCENTS = {
-    "Trending": (139, 73, 255),
-    "Popular": (166, 52, 225),
-    "Latest Releases": (117, 74, 255),
-    "Top Rated": (185, 151, 255),
-    "For You": (132, 91, 220),
+    "Trending": (137, 74, 255),
+    "Popular": (160, 75, 225),
+    "Latest Releases": (123, 83, 255),
+    "Top Rated": (183, 157, 255),
+    "For You": (143, 105, 220),
 }
 
 SESSION = requests.Session()
@@ -59,241 +59,311 @@ def log(message: str) -> None:
     print(message, flush=True)
 
 
-def env_manifests() -> list[str]:
-    keys = [
+def manifest_urls() -> list[str]:
+    names = (
         "AIO_METADATA_MANIFEST_URL_1",
         "AIO_METADATA_MANIFEST_URL_2",
         "BINGECAT_MANIFEST_URL",
-    ]
-    urls = [os.environ.get(k, "").strip() for k in keys]
-    urls = [u for u in urls if u]
+    )
+    urls = [os.environ.get(name, "").strip() for name in names]
+    urls = [url for url in urls if url]
     if not urls:
-        raise RuntimeError(
-            "No add-on manifest URLs found. Configure AIO_METADATA_MANIFEST_URL_1, "
-            "AIO_METADATA_MANIFEST_URL_2, and BINGECAT_MANIFEST_URL as GitHub Actions secrets."
-        )
+        raise RuntimeError("No add-on manifest URLs are configured in GitHub Actions secrets.")
     return urls
 
 
+def addon_base(manifest_url: str) -> str:
+    clean = manifest_url.split("?", 1)[0].rstrip("/")
+    return clean[:-len("/manifest.json")] if clean.endswith("/manifest.json") else clean
+
+
 def get_json(url: str) -> dict:
-    response = SESSION.get(url, timeout=REQUEST_TIMEOUT)
+    response = SESSION.get(url, timeout=TIMEOUT)
     response.raise_for_status()
     return response.json()
 
 
-def addon_base_url(manifest_url: str) -> str:
-    """Convert an add-on manifest URL into the base URL used by catalog/meta routes."""
-    clean = manifest_url.split("?", 1)[0].rstrip("/")
-    if clean.endswith("/manifest.json"):
-        return clean[:-len("/manifest.json")]
-    return clean
-
-
-def discover_catalog_hosts(manifest_urls: list[str]) -> dict[str, str]:
-    """Return catalog_id -> add-on base URL, validating IDs against manifests."""
-    found: dict[str, str] = {}
-    for manifest_url in manifest_urls:
-        base = addon_base_url(manifest_url)
+def find_catalog_hosts(urls: list[str]) -> dict[str, str]:
+    hosts: dict[str, str] = {}
+    for manifest_url in urls:
+        base = addon_base(manifest_url)
         try:
             manifest = get_json(manifest_url)
-            addon_name = manifest.get("name") or base
             catalogs = manifest.get("catalogs") or []
-            log(f"Manifest OK: {addon_name} ({len(catalogs)} catalogs)")
+            log(f"Manifest OK: {manifest.get('name', base)} ({len(catalogs)} catalogs)")
             for catalog in catalogs:
-                catalog_id = catalog.get("id")
-                if catalog_id:
-                    found.setdefault(str(catalog_id), base)
+                cid = catalog.get("id")
+                if cid:
+                    hosts.setdefault(str(cid), base)
         except Exception as exc:
-            log(f"WARNING: Could not read manifest {base}: {exc}")
-    return found
+            log(f"WARNING: manifest unavailable: {base}: {exc}")
+    return hosts
 
 
-def catalog_url(base: str, media_type: str, catalog_id: str) -> str:
-    return f"{base}/catalog/{media_type}/{catalog_id}.json"
+def fetch_catalog(base: str, media_type: str, catalog_id: str) -> list[dict]:
+    url = f"{base}/catalog/{media_type}/{catalog_id}.json"
+    payload = get_json(url)
+    return (payload.get("metas") or [])[:MAX_ITEMS_PER_CATALOG]
 
 
-def meta_url(base: str, media_type: str, item_id: str) -> str:
-    return f"{base}/meta/{media_type}/{item_id}.json"
+def fetch_meta(base: str, media_type: str, item_id: str) -> dict:
+    payload = get_json(f"{base}/meta/{media_type}/{item_id}.json")
+    return payload.get("meta") or {}
 
 
-def get_catalog_items(base: str, media_type: str, catalog_id: str) -> list[dict]:
-    data = get_json(catalog_url(base, media_type, catalog_id))
-    metas = data.get("metas") or []
-    return metas[:MAX_ITEMS_PER_CATALOG]
-
-
-def resolve_background(base: str, media_type: str, item: dict) -> str | None:
-    # Catalog responses sometimes already contain the background URL.
-    bg = item.get("background")
-    if bg and str(bg).startswith("http"):
-        return str(bg)
-
-    item_id = item.get("id")
-    if not item_id:
+def valid_http_url(value: object) -> str | None:
+    if not isinstance(value, str):
         return None
-    try:
-        data = get_json(meta_url(base, media_type, str(item_id)))
-        meta = data.get("meta") or {}
-        bg = meta.get("background") or meta.get("landscape") or meta.get("backdrop")
-        if bg and str(bg).startswith("http"):
-            return str(bg)
-    except Exception as exc:
-        log(f"  metadata skipped for {item.get('name', item_id)}: {exc}")
-    return None
+    parsed = urlparse(value)
+    if parsed.scheme not in ("http", "https"):
+        return None
+    # TMDB image paths often arrive as w500/w780/w1280. Request the original
+    # image instead of accepting a thumbnail and enlarging it to 4K.
+    if parsed.netloc.lower() in ("image.tmdb.org", "www.image.tmdb.org"):
+        value = value.replace("/t/p/w500/", "/t/p/original/")
+        value = value.replace("/t/p/w780/", "/t/p/original/")
+        value = value.replace("/t/p/w1280/", "/t/p/original/")
+        value = value.replace("/t/p/w1920/", "/t/p/original/")
+    return value
 
 
-def download_image(url: str) -> Image.Image | None:
+def download_image(url: str, min_size=(250, 250)) -> Image.Image | None:
     try:
-        parsed = urlparse(url)
-        if parsed.scheme not in ("http", "https"):
-            return None
-        response = SESSION.get(url, timeout=REQUEST_TIMEOUT)
+        response = SESSION.get(url, timeout=TIMEOUT)
         response.raise_for_status()
-        image = Image.open(io.BytesIO(response.content)).convert("RGB")
-        if image.width < 400 or image.height < 200:
+        img = Image.open(io.BytesIO(response.content)).convert("RGB")
+        if img.width < min_size[0] or img.height < min_size[1]:
             return None
-        return image
+        return img
     except Exception as exc:
-        log(f"  image download skipped: {exc}")
+        log(f"  image skipped: {exc}")
         return None
 
 
-def collect_images(category: str, catalog_hosts: dict[str, str]) -> list[Image.Image]:
-    collected: list[Image.Image] = []
-    seen: set[str] = set()
+def collect_category_art(category: str, hosts: dict[str, str]) -> tuple[list[Image.Image], list[Image.Image]]:
+    posters: list[Image.Image] = []
+    backdrops: list[Image.Image] = []
+    seen_posters: set[str] = set()
+    seen_backdrops: set[str] = set()
+
     for media_type, catalog_id in CATEGORY_CATALOGS[category]:
-        base = catalog_hosts.get(catalog_id)
+        base = hosts.get(catalog_id)
         if not base:
-            log(f"  catalog not found in supplied manifests: {catalog_id}")
+            log(f"  catalog not listed by installed manifests: {catalog_id}")
             continue
         try:
-            items = get_catalog_items(base, media_type, catalog_id)
-            log(f"  {catalog_id}: {len(items)} catalog items")
+            items = fetch_catalog(base, media_type, catalog_id)
+            log(f"  {catalog_id}: {len(items)} current catalog items")
         except Exception as exc:
             log(f"  catalog failed {catalog_id}: {exc}")
             continue
 
         for item in items:
-            bg_url = resolve_background(base, media_type, item)
-            if not bg_url or bg_url in seen:
-                continue
-            seen.add(bg_url)
-            image = download_image(bg_url)
-            if image:
-                collected.append(image)
-            if len(collected) >= MAX_BACKDROPS_PER_CATEGORY:
-                return collected
-    return collected
+            meta = {}
+            poster_url = valid_http_url(item.get("poster"))
+            backdrop_url = valid_http_url(item.get("background") or item.get("landscape"))
+
+            # Resolve missing poster/background URLs from the add-on metadata endpoint.
+            if (not poster_url or not backdrop_url) and item.get("id"):
+                try:
+                    meta = fetch_meta(base, media_type, str(item["id"]))
+                except Exception as exc:
+                    log(f"  metadata skipped for {item.get('name', item.get('id'))}: {exc}")
+
+            if not poster_url:
+                poster_url = valid_http_url(meta.get("poster"))
+            if not backdrop_url:
+                backdrop_url = valid_http_url(meta.get("background") or meta.get("landscape"))
+
+            if poster_url and poster_url not in seen_posters and len(posters) < MAX_POSTERS:
+                seen_posters.add(poster_url)
+                image = download_image(poster_url, min_size=(180, 260))
+                if image:
+                    posters.append(image)
+
+            if backdrop_url and backdrop_url not in seen_backdrops and len(backdrops) < MAX_BACKDROPS:
+                seen_backdrops.add(backdrop_url)
+                image = download_image(backdrop_url, min_size=(1280, 720))
+                if image:
+                    backdrops.append(image)
+
+            if len(posters) >= MAX_POSTERS and len(backdrops) >= MAX_BACKDROPS:
+                break
+
+    return posters, backdrops
 
 
-def cover_crop(image: Image.Image, target_size: tuple[int, int]) -> Image.Image:
-    return ImageOps.fit(image, target_size, method=Image.Resampling.LANCZOS, centering=(0.5, 0.42))
+def crop_cover(img: Image.Image, size: tuple[int, int]) -> Image.Image:
+    return ImageOps.fit(img, size, method=Image.Resampling.LANCZOS, centering=(0.5, 0.38))
 
 
-def make_violet_platinum_collage(images: list[Image.Image], category: str) -> Image.Image:
-    """Compose title backdrops into a cinematic, dark purple/silver layered mosaic."""
-    if len(images) < 3:
-        raise RuntimeError(
-            f"Only {len(images)} usable title backdrops were found for {category}; "
-            "at least 3 are required. Existing backdrop was left untouched."
-        )
+def rounded_mask(size: tuple[int, int], radius: int) -> Image.Image:
+    mask = Image.new("L", size, 0)
+    ImageDraw.Draw(mask).rounded_rectangle((0, 0, size[0] - 1, size[1] - 1), radius, fill=255)
+    return mask
+
+
+def build_cover(posters: list[Image.Image], category: str) -> Image.Image:
+    if len(posters) < 5:
+        raise RuntimeError(f"Only {len(posters)} usable posters for {category}; 5 are required.")
 
     random.seed(category)
+    # Rotate through the current catalog ordering so each scheduled run can produce a new mix.
+    selected = posters[:]
+    random.shuffle(selected)
+    canvas = Image.new("RGBA", COVER_SIZE, (7, 6, 12, 255))
     accent = ACCENTS[category]
-    canvas = Image.new("RGB", (WIDTH, HEIGHT), (7, 6, 12))
 
-    # Use a large feature image with two smaller supporting panels.
-    random.shuffle(images)
-    hero = cover_crop(images[0], (WIDTH, HEIGHT))
-    hero = ImageEnhance.Color(hero).enhance(0.68)
-    hero = ImageEnhance.Contrast(hero).enhance(1.12)
-    hero = ImageEnhance.Brightness(hero).enhance(0.58)
-    canvas.paste(hero, (0, 0))
-
-    # Darken the center and edges so the category logo remains legible.
-    overlay = Image.new("RGBA", (WIDTH, HEIGHT), (4, 3, 10, 112))
-    canvas = Image.alpha_composite(canvas.convert("RGBA"), overlay)
-
-    # Violet tint, blended gently rather than flattening the source imagery.
-    tint = Image.new("RGBA", (WIDTH, HEIGHT), (*accent, 46))
-    canvas = Image.alpha_composite(canvas, tint)
-
-    # Three staggered translucent image bands create an editorial streaming collage.
-    panel_specs = [
-        ((0, 0, 640, 360), images[1]),
-        ((1280, 0, 1920, 360), images[2]),
-        ((0, 720, 640, 1080), images[3] if len(images) > 3 else images[1]),
-        ((1280, 720, 1920, 1080), images[4] if len(images) > 4 else images[2]),
+    # Poster windows: a larger center feature, flanked by four smaller cards.
+    specs = [
+        (52, 180, 250, 505),
+        (278, 105, 285, 655),
+        (535, 42, 466, 780),
+        (948, 105, 285, 655),
+        (1234, 180, 250, 505),
     ]
-    for (x1, y1, x2, y2), source in panel_specs:
-        panel = cover_crop(source, (x2 - x1, y2 - y1))
-        panel = ImageEnhance.Color(panel).enhance(0.58)
-        panel = ImageEnhance.Brightness(panel).enhance(0.62)
-        panel = Image.blend(panel, Image.new("RGB", panel.size, accent), 0.18)
-        panel_rgba = panel.convert("RGBA")
-        panel_rgba.putalpha(118)
-        canvas.alpha_composite(panel_rgba, (x1, y1))
+    for idx, (x, y, w, h) in enumerate(specs):
+        poster = crop_cover(selected[idx], (w, h))
+        poster = ImageEnhance.Color(poster).enhance(0.84)
+        poster = ImageEnhance.Contrast(poster).enhance(1.08)
+        # Subtle tint to unify source artwork without obscuring it.
+        tint = Image.new("RGB", poster.size, accent)
+        poster = Image.blend(poster, tint, 0.10)
+        mask = rounded_mask((w, h), 18)
 
-    # Soft dark center band for title logo placement.
-    center_shade = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(center_shade)
-    draw.rectangle((360, 260, 1560, 820), fill=(4, 3, 9, 92))
-    center_shade = center_shade.filter(ImageFilter.GaussianBlur(110))
-    canvas = Image.alpha_composite(canvas, center_shade)
+        shadow = Image.new("RGBA", (w + 34, h + 34), (0, 0, 0, 0))
+        shadow_mask = Image.new("L", shadow.size, 0)
+        ImageDraw.Draw(shadow_mask).rounded_rectangle((14, 14, w + 14, h + 14), 20, fill=160)
+        shadow_mask = shadow_mask.filter(ImageFilter.GaussianBlur(14))
+        shadow.putalpha(shadow_mask)
+        canvas.alpha_composite(shadow, (x - 17, y - 8))
 
-    # Metallic/violet contour accents at the outer edges.
-    lines = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 0))
-    ld = ImageDraw.Draw(lines)
-    for offset in range(0, 5):
-        y = 115 + offset * 13
-        ld.arc((-250, y - 180, 820, y + 430), start=205, end=345,
-               fill=(205, 190, 255, 34 - offset * 4), width=3)
-        y2 = 865 + offset * 12
-        ld.arc((1160, y2 - 390, 2220, y2 + 220), start=20, end=160,
-               fill=(*accent, 34 - offset * 4), width=3)
-    lines = lines.filter(ImageFilter.GaussianBlur(1.2))
-    canvas = Image.alpha_composite(canvas, lines)
+        poster_rgba = poster.convert("RGBA")
+        poster_rgba.putalpha(mask)
+        canvas.alpha_composite(poster_rgba, (x, y))
 
-    # Edge vignette.
-    vignette = Image.new("L", (WIDTH, HEIGHT), 0)
-    vd = ImageDraw.Draw(vignette)
-    vd.ellipse((-260, -200, WIDTH + 260, HEIGHT + 200), fill=190)
-    vignette = vignette.filter(ImageFilter.GaussianBlur(190))
-    dark = Image.new("RGBA", (WIDTH, HEIGHT), (0, 0, 0, 150))
-    dark.putalpha(Image.eval(vignette, lambda p: 150 - int(p * 0.55)))
-    canvas = Image.alpha_composite(canvas, dark)
+        # Fine platinum/violet edge.
+        edge = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        ImageDraw.Draw(edge).rounded_rectangle(
+            (1, 1, w - 2, h - 2), 18,
+            outline=(205, 190, 255, 95 if idx == 2 else 60), width=2
+        )
+        canvas.alpha_composite(edge, (x, y))
+
+    # Darken top/bottom edges, leaving poster artwork clear and title-logo overlay readable.
+    shade = Image.new("RGBA", COVER_SIZE, (0, 0, 0, 0))
+    sd = ImageDraw.Draw(shade)
+    sd.rectangle((0, 0, COVER_SIZE[0], 100), fill=(3, 2, 8, 95))
+    sd.rectangle((0, 750, COVER_SIZE[0], COVER_SIZE[1]), fill=(3, 2, 8, 115))
+    shade = shade.filter(ImageFilter.GaussianBlur(55))
+    canvas = Image.alpha_composite(canvas, shade)
+
+    # Restrained category accent glow near the lower edge.
+    glow = Image.new("RGBA", COVER_SIZE, (0, 0, 0, 0))
+    gd = ImageDraw.Draw(glow)
+    gd.ellipse((380, 700, 1160, 950), fill=(*accent, 28))
+    glow = glow.filter(ImageFilter.GaussianBlur(100))
+    canvas = Image.alpha_composite(canvas, glow)
 
     return canvas.convert("RGB")
 
 
-def main() -> int:
-    manifests = env_manifests()
-    catalog_hosts = discover_catalog_hosts(manifests)
-    if not catalog_hosts:
-        raise RuntimeError("No catalog IDs were found in the supplied add-on manifests.")
+def build_backdrop(backdrops: list[Image.Image], category: str) -> Image.Image:
+    if len(backdrops) < 3:
+        raise RuntimeError(f"Only {len(backdrops)} usable hero backdrops for {category}; 3 are required.")
 
-    failures = []
+    # Prioritize the largest source images; avoid building a 4K hero from tiny thumbnails.
+    chosen = sorted(backdrops, key=lambda image: image.width * image.height, reverse=True)
+    accent = ACCENTS[category]
+
+    # Use the highest-resolution current title backdrop as the main image.
+    hero = ImageOps.fit(chosen[0], BACKDROP_SIZE, method=Image.Resampling.LANCZOS, centering=(0.5, 0.45))
+    hero = ImageEnhance.Color(hero).enhance(0.90)
+    hero = ImageEnhance.Contrast(hero).enhance(1.06)
+    # Careful output sharpening compensates for resize softness without halos.
+    hero = hero.filter(ImageFilter.UnsharpMask(radius=2.2, percent=115, threshold=3))
+    canvas = hero.convert("RGBA")
+
+    # Supporting artwork appears only as softly blended edge panels, not a tiled grid.
+    for side, source in (("left", chosen[1]), ("right", chosen[2])):
+        panel_w = 760
+        panel = ImageOps.fit(source, (panel_w, BACKDROP_SIZE[1]), method=Image.Resampling.LANCZOS)
+        panel = ImageEnhance.Color(panel).enhance(0.82)
+        panel = Image.blend(panel, Image.new("RGB", panel.size, accent), 0.07).convert("RGBA")
+        panel.putalpha(62)
+        x = 0 if side == "left" else BACKDROP_SIZE[0] - panel_w
+        canvas.alpha_composite(panel, (x, 0))
+
+    # Violet Platinum color grade.
+    tint = Image.new("RGBA", BACKDROP_SIZE, (*accent, 18))
+    canvas = Image.alpha_composite(canvas, tint)
+
+    # Soft center gradient preserves visual space for the separate title logo.
+    gradient = Image.new("RGBA", BACKDROP_SIZE, (0, 0, 0, 0))
+    gd = ImageDraw.Draw(gradient)
+    gd.rectangle((420, 500, 3420, 1700), fill=(4, 3, 10, 36))
+    gradient = gradient.filter(ImageFilter.GaussianBlur(210))
+    canvas = Image.alpha_composite(canvas, gradient)
+
+    # Gentle cinematic vignette.
+    vignette = Image.new("L", BACKDROP_SIZE, 0)
+    vd = ImageDraw.Draw(vignette)
+    vd.ellipse((-180, -120, BACKDROP_SIZE[0] + 180, BACKDROP_SIZE[1] + 120), fill=190)
+    vignette = vignette.filter(ImageFilter.GaussianBlur(175))
+    alpha = Image.eval(vignette, lambda p: max(0, min(78, 78 - int(p * 0.32))))
+    dark = Image.new("RGBA", BACKDROP_SIZE, (0, 0, 0, 0))
+    dark.putalpha(alpha)
+    canvas = Image.alpha_composite(canvas, dark)
+
+    # Final subtle sharpening after compositing; preserve real source detail.
+    final = canvas.convert("RGB")
+    final = final.filter(ImageFilter.UnsharpMask(radius=1.6, percent=85, threshold=4))
+    return final
+
+
+def save_webp(image: Image.Image, destination: Path) -> None:
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temp = destination.with_name(destination.stem + ".tmp.webp")
+    image.save(temp, "WEBP", quality=96, method=6, exact=True)
+    temp.replace(destination)
+
+
+def main() -> int:
+    hosts = find_catalog_hosts(manifest_urls())
+    if not hosts:
+        raise RuntimeError("No catalog IDs were discovered from the configured add-on manifests.")
+
     updated = []
+    failures = []
     for category in CATEGORY_CATALOGS:
         log(f"\n=== {category} ===")
         try:
-            images = collect_images(category, catalog_hosts)
-            log(f"  usable backdrops: {len(images)}")
-            output = make_violet_platinum_collage(images, category)
-            destination_dir = DISCOVER_DIR / category / "Backdrop"
-            destination_dir.mkdir(parents=True, exist_ok=True)
-            destination = destination_dir / "backdrop.webp"
-            temp = destination.with_suffix(".tmp.webp")
-            output.save(temp, "WEBP", quality=91, method=6)
-            temp.replace(destination)
+            posters, backdrops = collect_category_art(category, hosts)
+            log(f"  usable posters: {len(posters)}")
+            log(f"  usable hero backdrops (minimum 1280x720 source): {len(backdrops)}")
+            cover = build_cover(posters, category)
+            hero = build_backdrop(backdrops, category)
+
+            cover_path = DISCOVER_DIR / category / "Cover" / "cover.webp"
+            backdrop_path = DISCOVER_DIR / category / "Backdrop" / "backdrop.webp"
+            save_webp(cover, cover_path)
+            save_webp(hero, backdrop_path)
+
+            # Logos are stable typography and are installed separately, not regenerated from posters.
+            logo_path = DISCOVER_DIR / category / "Logo" / "logo.webp"
+            if not logo_path.exists():
+                raise RuntimeError(f"Separate logo is missing: {logo_path.relative_to(REPO_ROOT)}")
+
             updated.append(category)
-            log(f"  Wrote {destination.relative_to(REPO_ROOT)}")
+            log(f"  Wrote {cover_path.relative_to(REPO_ROOT)}")
+            log(f"  Wrote {backdrop_path.relative_to(REPO_ROOT)} ({BACKDROP_SIZE[0]}x{BACKDROP_SIZE[1]} 4K UHD)")
+            log(f"  Kept separate logo: {logo_path.relative_to(REPO_ROOT)}")
         except Exception as exc:
             failures.append((category, str(exc)))
             log(f"  ERROR: {exc}")
 
     log("\n=== Summary ===")
-    log(f"Updated: {', '.join(updated) if updated else 'none'}")
+    log(f"Updated covers and hero backdrops: {', '.join(updated) if updated else 'none'}")
     if failures:
         for category, error in failures:
             log(f"Not updated — {category}: {error}")
@@ -304,6 +374,6 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except Exception as error:
-        log(f"FATAL: {error}")
+    except Exception as exc:
+        log(f"FATAL: {exc}")
         raise SystemExit(1)

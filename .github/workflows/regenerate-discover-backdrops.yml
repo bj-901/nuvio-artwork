@@ -1,4 +1,4 @@
-name: Regenerate Nuvio Discover Backdrops
+name: Regenerate Nuvio Discover Artwork
 
 on:
   workflow_dispatch:
@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: nuvio-discover-backdrops
+  group: nuvio-discover-artwork
   cancel-in-progress: false
 
 jobs:
@@ -30,25 +30,35 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install requests Pillow
 
-      - name: Generate category backdrops
+      - name: Generate category covers and hero backdrops
         env:
           AIO_METADATA_MANIFEST_URL_1: ${{ secrets.AIO_METADATA_MANIFEST_URL_1 }}
           AIO_METADATA_MANIFEST_URL_2: ${{ secrets.AIO_METADATA_MANIFEST_URL_2 }}
           BINGECAT_MANIFEST_URL: ${{ secrets.BINGECAT_MANIFEST_URL }}
         run: python scripts/generate_discover_backdrops.py
 
-      - name: Commit and push updated backdrops
+      - name: Commit and push refreshed artwork
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add "Discover/Trending/Backdrop/backdrop.webp" \
+          git add "Discover/Trending/Cover/cover.webp" \
+                  "Discover/Popular/Cover/cover.webp" \
+                  "Discover/Latest Releases/Cover/cover.webp" \
+                  "Discover/Top Rated/Cover/cover.webp" \
+                  "Discover/For You/Cover/cover.webp" \
+                  "Discover/Trending/Backdrop/backdrop.webp" \
                   "Discover/Popular/Backdrop/backdrop.webp" \
                   "Discover/Latest Releases/Backdrop/backdrop.webp" \
                   "Discover/Top Rated/Backdrop/backdrop.webp" \
-                  "Discover/For You/Backdrop/backdrop.webp"
+                  "Discover/For You/Backdrop/backdrop.webp" \
+                  "Discover/Trending/Logo/logo.webp" \
+                  "Discover/Popular/Logo/logo.webp" \
+                  "Discover/Latest Releases/Logo/logo.webp" \
+                  "Discover/Top Rated/Logo/logo.webp" \
+                  "Discover/For You/Logo/logo.webp"
           if git diff --cached --quiet; then
-            echo "No backdrop changes to publish."
+            echo "No artwork changes to publish."
           else
-            git commit -m "Refresh automated Discover hero backdrops"
+            git commit -m "Refresh automated Discover covers and hero backdrops"
             git push
           fi
