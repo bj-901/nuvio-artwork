@@ -3,7 +3,8 @@
 Refresh Nuvio Discover cover cards and hero backdrops from the live Stremio catalogs.
 
 - Cover: portrait-poster collage, no embedded wording.
-- Backdrop: one current title backdrop per category, with no collage or color tint.
+- Backdrop: one dominant current title backdrop, subtly blended with supporting
+  title backdrops and Violet Platinum color grading.
 - Logo: static transparent Violet Platinum typography installed separately.
 Existing files are replaced only after a category has enough valid source images.
 """
@@ -24,10 +25,10 @@ DISCOVER_DIR = REPO_ROOT / "Discover"
 COVER_SIZE = (1536, 864)
 BACKDROP_SIZE = (3840, 2160)  # Native 4K UHD output for large TVs
 MAX_ITEMS_PER_CATALOG = 30
-MAX_POSTERS = 15
-MAX_BACKDROPS = 12
+MAX_POSTERS = 30
+MAX_BACKDROPS = 18
 TIMEOUT = 25
-USER_AGENT = "Nuvio-Discover-Artwork-Generator/3.0-Single-Backdrop-4K"
+USER_AGENT = "Nuvio-Discover-Artwork-Generator/2.2-4K-Randomized"
 
 CATEGORY_CATALOGS = {
     "Trending": [("movie", "mdblist.206584"), ("series", "mdblist.207259")],
@@ -145,14 +146,17 @@ def collect_category_art(category: str, hosts: dict[str, str]) -> tuple[list[Ima
     seen_posters: set[str] = set()
     seen_backdrops: set[str] = set()
 
-    for media_type, catalog_id in CATEGORY_CATALOGS[category]:
+    catalog_sources = CATEGORY_CATALOGS[category][:]
+    random.shuffle(catalog_sources)
+    for media_type, catalog_id in catalog_sources:
         base = hosts.get(catalog_id)
         if not base:
             log(f"  catalog not listed by installed manifests: {catalog_id}")
             continue
         try:
             items = fetch_catalog(base, media_type, catalog_id)
-            log(f"  {catalog_id}: {len(items)} current catalog items")
+            random.shuffle(items)
+            log(f"  {catalog_id}: {len(items)} current catalog items (selection shuffled)")
         except Exception as exc:
             log(f"  catalog failed {catalog_id}: {exc}")
             continue
@@ -206,21 +210,18 @@ def build_cover(posters: list[Image.Image], category: str) -> Image.Image:
     if len(posters) < 5:
         raise RuntimeError(f"Only {len(posters)} usable posters for {category}; 5 are required.")
 
-    random.seed(category)
-    # Rotate through the current catalog ordering so each scheduled run can produce a new mix.
-    selected = posters[:]
-    random.shuffle(selected)
+    # Use fresh, non-deterministic poster selection on every workflow run.
+    selected = random.sample(posters, k=len(posters))
     canvas = Image.new("RGBA", COVER_SIZE, (7, 6, 12, 255))
     accent = ACCENTS[category]
 
-    # Poster windows: a larger center feature, flanked by four smaller cards.
-    specs = [
-        (52, 180, 250, 505),
-        (278, 105, 285, 655),
-        (535, 42, 466, 780),
-        (948, 105, 285, 655),
-        (1234, 180, 250, 505),
+    # Rotate between restrained editorial layouts while keeping the same Nuvio style.
+    layouts = [
+        [(52, 180, 250, 505), (278, 105, 285, 655), (535, 42, 466, 780), (948, 105, 285, 655), (1234, 180, 250, 505)],
+        [(40, 130, 270, 600), (285, 205, 250, 500), (535, 35, 466, 790), (1000, 205, 250, 500), (1225, 130, 270, 600)],
+        [(45, 230, 270, 450), (290, 95, 285, 675), (565, 65, 410, 735), (965, 95, 285, 675), (1220, 230, 270, 450)],
     ]
+    specs = random.choice(layouts)
     for idx, (x, y, w, h) in enumerate(specs):
         poster = crop_cover(selected[idx], (w, h))
         poster = ImageEnhance.Color(poster).enhance(0.84)
@@ -267,36 +268,61 @@ def build_cover(posters: list[Image.Image], category: str) -> Image.Image:
     return canvas.convert("RGB")
 
 
-def build_backdrop(backdrops: list[Image.Image], category: str) -> tuple[Image.Image, tuple[int, int]]:
-    """
-    Build a clean 4K hero from one current title backdrop.
+def build_backdrop(backdrops: list[Image.Image], category: str) -> Image.Image:
+    if len(backdrops) < 3:
+        raise RuntimeError(f"Only {len(backdrops)} usable hero backdrops for {category}; 3 are required.")
 
-    The largest available source is selected. No supporting images, panels,
-    category tint, vignette, or artificial dark overlay are composited.
-    """
-    if not backdrops:
-        raise RuntimeError(f"No usable hero backdrop found for {category}.")
+    # Keep source quality high, but rotate among the best available scenes so the
+    # same catalog can still produce a fresh hero on the next scheduled run.
+    ranked = sorted(backdrops, key=lambda image: image.width * image.height, reverse=True)
+    hero_pool = ranked[:min(8, len(ranked))]
+    hero_source = random.choice(hero_pool)
+    support_pool = [image for image in ranked if image is not hero_source]
+    supporting = random.sample(support_pool, k=2)
+    accent = ACCENTS[category]
 
-    # Prefer the source with the most actual image pixels.
-    source = max(backdrops, key=lambda image: image.width * image.height)
-    source_size = source.size
+    hero = ImageOps.fit(hero_source, BACKDROP_SIZE, method=Image.Resampling.LANCZOS, centering=(0.5, 0.45))
+    hero = ImageEnhance.Color(hero).enhance(0.90)
+    hero = ImageEnhance.Contrast(hero).enhance(1.06)
+    # Careful output sharpening compensates for resize softness without halos.
+    hero = hero.filter(ImageFilter.UnsharpMask(radius=2.2, percent=115, threshold=3))
+    canvas = hero.convert("RGBA")
 
-    # Fill the 16:9 UHD canvas with a single image. This may crop a small
-    # amount from sources that are not exactly 16:9, but never adds panels.
-    hero = ImageOps.fit(
-        source,
-        BACKDROP_SIZE,
-        method=Image.Resampling.LANCZOS,
-        centering=(0.5, 0.45),
-    )
+    # Supporting artwork appears only as softly blended edge panels, not a tiled grid.
+    for side, source in (("left", supporting[0]), ("right", supporting[1])):
+        panel_w = 760
+        panel = ImageOps.fit(source, (panel_w, BACKDROP_SIZE[1]), method=Image.Resampling.LANCZOS)
+        panel = ImageEnhance.Color(panel).enhance(0.82)
+        panel = Image.blend(panel, Image.new("RGB", panel.size, accent), 0.07).convert("RGBA")
+        panel.putalpha(62)
+        x = 0 if side == "left" else BACKDROP_SIZE[0] - panel_w
+        canvas.alpha_composite(panel, (x, 0))
 
-    # Apply only restrained output sharpening. No color tint, dark gradient,
-    # vignette, grain, or secondary artwork is added.
-    hero = hero.filter(
-        ImageFilter.UnsharpMask(radius=1.2, percent=55, threshold=4)
-    )
+    # Violet Platinum color grade.
+    tint = Image.new("RGBA", BACKDROP_SIZE, (*accent, 18))
+    canvas = Image.alpha_composite(canvas, tint)
 
-    return hero.convert("RGB"), source_size
+    # Soft center gradient preserves visual space for the separate title logo.
+    gradient = Image.new("RGBA", BACKDROP_SIZE, (0, 0, 0, 0))
+    gd = ImageDraw.Draw(gradient)
+    gd.rectangle((420, 500, 3420, 1700), fill=(4, 3, 10, 36))
+    gradient = gradient.filter(ImageFilter.GaussianBlur(210))
+    canvas = Image.alpha_composite(canvas, gradient)
+
+    # Gentle cinematic vignette.
+    vignette = Image.new("L", BACKDROP_SIZE, 0)
+    vd = ImageDraw.Draw(vignette)
+    vd.ellipse((-180, -120, BACKDROP_SIZE[0] + 180, BACKDROP_SIZE[1] + 120), fill=190)
+    vignette = vignette.filter(ImageFilter.GaussianBlur(175))
+    alpha = Image.eval(vignette, lambda p: max(0, min(78, 78 - int(p * 0.32))))
+    dark = Image.new("RGBA", BACKDROP_SIZE, (0, 0, 0, 0))
+    dark.putalpha(alpha)
+    canvas = Image.alpha_composite(canvas, dark)
+
+    # Final subtle sharpening after compositing; preserve real source detail.
+    final = canvas.convert("RGB")
+    final = final.filter(ImageFilter.UnsharpMask(radius=1.6, percent=85, threshold=4))
+    return final
 
 
 def save_webp(image: Image.Image, destination: Path) -> None:
@@ -320,7 +346,7 @@ def main() -> int:
             log(f"  usable posters: {len(posters)}")
             log(f"  usable hero backdrops (minimum 1280x720 source): {len(backdrops)}")
             cover = build_cover(posters, category)
-            hero, hero_source_size = build_backdrop(backdrops, category)
+            hero = build_backdrop(backdrops, category)
 
             cover_path = DISCOVER_DIR / category / "Cover" / "cover.webp"
             backdrop_path = DISCOVER_DIR / category / "Backdrop" / "backdrop.webp"
@@ -334,12 +360,7 @@ def main() -> int:
 
             updated.append(category)
             log(f"  Wrote {cover_path.relative_to(REPO_ROOT)}")
-            source_label = "native 4K source" if hero_source_size[0] >= 3840 and hero_source_size[1] >= 2160 else "upscaled to 4K output"
-            log(
-                f"  Wrote {backdrop_path.relative_to(REPO_ROOT)} "
-                f"({BACKDROP_SIZE[0]}x{BACKDROP_SIZE[1]} output; "
-                f"source {hero_source_size[0]}x{hero_source_size[1]} — {source_label})"
-            )
+            log(f"  Wrote {backdrop_path.relative_to(REPO_ROOT)} ({BACKDROP_SIZE[0]}x{BACKDROP_SIZE[1]} 4K UHD; randomized hero/layout)")
             log(f"  Kept separate logo: {logo_path.relative_to(REPO_ROOT)}")
         except Exception as exc:
             failures.append((category, str(exc)))
