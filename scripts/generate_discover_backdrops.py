@@ -31,8 +31,12 @@ MAX_ITEMS_PER_CATALOG = 30
 MAX_POSTERS = 15
 MAX_BACKDROPS = 12
 MIN_BACKDROP_ASPECT = 1.50  # Reject portrait/square promotional artwork as hero images
+BLACK_BORDER_MIN_FRACTION = 0.035  # Reject embedded black bars/backgrounds at least 3.5% thick
+BLACK_BORDER_MAX_MEAN = 16.0
+BLACK_BORDER_MAX_STDDEV = 9.0
+BLACK_BORDER_MIN_DARK_FRACTION = 0.97
 TIMEOUT = 25
-USER_AGENT = "Nuvio-Discover-Artwork-Generator/2.3-Audited"
+USER_AGENT = "Nuvio-Discover-Artwork-Generator/2.4-Composition-Checked"
 AUDIT_PATH = DISCOVER_DIR / "artwork-audit.json"
 
 CATEGORY_CATALOGS = {
@@ -145,6 +149,59 @@ def download_image(url: str, min_size=(250, 250)) -> Image.Image | None:
         return None
 
 
+def _edge_line_is_black(values: list[int]) -> bool:
+    """Return true for a nearly uniform black row/column, typical of embedded bars."""
+    if not values:
+        return False
+    mean = sum(values) / len(values)
+    variance = sum((value - mean) ** 2 for value in values) / len(values)
+    dark_fraction = sum(value <= 20 for value in values) / len(values)
+    return mean <= BLACK_BORDER_MAX_MEAN and variance ** 0.5 <= BLACK_BORDER_MAX_STDDEV and dark_fraction >= BLACK_BORDER_MIN_DARK_FRACTION
+
+
+def detect_embedded_black_borders(image: Image.Image) -> str | None:
+    """Detect substantial, uniform black bars/background around the actual artwork.
+
+    Analysis is performed on a small grayscale thumbnail. A border is only flagged
+    when matching opposite edges contain continuous near-black bands and the image
+    center is meaningfully brighter, avoiding rejection of ordinary dark scenes.
+    """
+    sample = image.convert("L")
+    sample.thumbnail((256, 144), Image.Resampling.LANCZOS)
+    width, height = sample.size
+    pixels = sample.load()
+
+    left = 0
+    while left < width and _edge_line_is_black([pixels[left, y] for y in range(height)]):
+        left += 1
+    right = 0
+    while right < width and _edge_line_is_black([pixels[width - 1 - right, y] for y in range(height)]):
+        right += 1
+    top = 0
+    while top < height and _edge_line_is_black([pixels[x, top] for x in range(width)]):
+        top += 1
+    bottom = 0
+    while bottom < height and _edge_line_is_black([pixels[x, height - 1 - bottom] for x in range(width)]):
+        bottom += 1
+
+    center_values = [pixels[x, y] for y in range(height // 4, (height * 3) // 4)
+                     for x in range(width // 4, (width * 3) // 4)]
+    center_mean = sum(center_values) / max(1, len(center_values))
+    min_x = max(2, int(width * BLACK_BORDER_MIN_FRACTION))
+    min_y = max(2, int(height * BLACK_BORDER_MIN_FRACTION))
+    vertical_pair = left >= min_x and right >= min_x
+    horizontal_pair = top >= min_y and bottom >= min_y
+
+    if center_mean >= 22 and (vertical_pair or horizontal_pair):
+        details = []
+        if vertical_pair:
+            details.append(f"left/right black bands {left / width:.0%}/{right / width:.0%}")
+        if horizontal_pair:
+            details.append(f"top/bottom black bands {top / height:.0%}/{bottom / height:.0%}")
+        return "embedded black borders/background detected (" + ", ".join(details) + ")"
+    return None
+
+
 def download_backdrop(url: str) -> tuple[Image.Image | None, tuple[int, int] | None, str]:
     """Download a backdrop and report its original dimensions and validation result."""
     try:
@@ -158,6 +215,9 @@ def download_backdrop(url: str) -> tuple[Image.Image | None, tuple[int, int] | N
             if aspect < MIN_BACKDROP_ASPECT:
                 return None, (width, height), f"not a landscape hero image; aspect ratio {aspect:.2f} is below {MIN_BACKDROP_ASPECT:.2f}"
             image = original.convert("RGB")
+            border_reason = detect_embedded_black_borders(image)
+            if border_reason:
+                return None, (width, height), border_reason
         return image, (width, height), "accepted"
     except Exception as exc:
         return None, None, f"download/decode failed: {exc}"
@@ -407,11 +467,18 @@ def main() -> int:
     failures = []
     audit_report = {
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
-        "generator_version": "2.3-Audited",
+        "generator_version": "2.4-Composition-Checked",
         "rules": {
             "allowed_media_types": ["movie", "series"],
             "minimum_backdrop_dimensions": list(MIN_BACKDROP_SIZE),
             "minimum_backdrop_aspect_ratio": MIN_BACKDROP_ASPECT,
+            "black_border_detection": {
+                "enabled": True,
+                "minimum_opposite_edge_band_fraction": BLACK_BORDER_MIN_FRACTION,
+                "maximum_edge_mean_luminance": BLACK_BORDER_MAX_MEAN,
+                "maximum_edge_luminance_stddev": BLACK_BORDER_MAX_STDDEV,
+                "minimum_dark_pixel_fraction": BLACK_BORDER_MIN_DARK_FRACTION,
+            },
             "maximum_output_dimensions": list(MAX_BACKDROP_SIZE),
             "upscaling": False,
         },

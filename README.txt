@@ -1,31 +1,21 @@
-Nuvio Discover Artwork Audit Update
+Nuvio Discover Composition Validation Update (v2.4)
 
-This update preserves the existing category catalog IDs, Discover folder structure,
-cover design, Violet Platinum grading, and separate logo assets.
+Purpose
+This update adds a conservative detector for embedded black bars and large uniform black backgrounds around otherwise landscape images. It is intended to prevent poster-like artwork, such as the current Top Rated/Godfather montage, from being selected as a hero backdrop.
 
-What changes:
-- Rejects catalog items whose explicit media type is not the expected movie/series type.
-- Rejects hero images smaller than 1920x1080.
-- Rejects portrait/square promotional artwork as hero backdrops (minimum 1.50 aspect ratio).
-- Logs the title, movie/series type, catalog ID, source host, original image dimensions,
-  and acceptance/rejection reason for each processed catalog item.
-- Records the selected hero title and source/output dimensions in Discover/artwork-audit.json.
-- Adds the audit report to the GitHub Actions commit list.
-- Never upscales a hero backdrop; 4K is only labelled native when the source itself is at least 3840x2160.
+Install
+1. Extract this ZIP into the root of D:\GitHub\nuvio-artwork.
+2. Allow the existing scripts\generate_discover_backdrops.py to be replaced.
+3. Do not replace your workflow file; the current workflow already commits Discover\artwork-audit.json.
+4. Commit and push the one changed Python file in GitHub Desktop.
+5. Run the existing “Regenerate Nuvio Discover Artwork” GitHub Action.
 
-Install:
-1. Close any editor currently changing these files.
-2. Extract this ZIP into D:\GitHub\nuvio-artwork, allowing it to overwrite the two existing files.
-3. Confirm these exact paths were replaced:
-   scripts\generate_discover_backdrops.py
-   .github\workflows\regenerate-discover-backdrops.yml
-4. Review the changes in GitHub Desktop, commit, and push to main.
-5. Run the existing GitHub Actions workflow manually.
-6. After it completes, open Discover\artwork-audit.json in the repository to see the selected title and image-source details for each category.
+What changes
+- Keeps the current catalog IDs, manifest secrets, cover generation, logos, and audit report.
+- Adds black-border/background validation to backdrop candidates.
+- Records the rejection reason in Discover/artwork-audit.json.
+- Does not upscale images.
+- If a category has fewer than three acceptable backdrops after filtering, it will fail safely and leave that category's existing artwork in place.
 
-Important:
-- Keep your existing GitHub Actions secrets. This update does not require changing them.
-- The audit stores source hostnames, not full image URLs or manifest credentials.
-- Image metadata can tie a backdrop URL to a movie/series record and filter obvious bad aspect ratios,
-  but it cannot visually prove that every image depicts the correct scene. The audit makes the
-  source title visible so questionable matches can be caught and corrected.
+Note
+The detector looks for nearly uniform near-black bands along opposite edges and a brighter center. It is deliberately conservative; it cannot understand every artistic composition, so visual review is still useful.
