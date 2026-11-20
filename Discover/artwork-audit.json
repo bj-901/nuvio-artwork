@@ -1,6 +1,6 @@
 {
-  "generated_at_utc": "2026-11-20T16:10:50.771729+00:00",
-  "generator_version": "2.3-Audited",
+  "generated_at_utc": "2026-11-20T16:57:52.282357+00:00",
+  "generator_version": "2.4-Composition-Checked",
   "rules": {
     "allowed_media_types": [
       "movie",
@@ -11,6 +11,13 @@
       1080
     ],
     "minimum_backdrop_aspect_ratio": 1.5,
+    "black_border_detection": {
+      "enabled": true,
+      "minimum_opposite_edge_band_fraction": 0.035,
+      "maximum_edge_mean_luminance": 16.0,
+      "maximum_edge_luminance_stddev": 9.0,
+      "minimum_dark_pixel_fraction": 0.97
+    },
     "maximum_output_dimensions": [
       3840,
       2160
@@ -97,14 +104,13 @@
           "expected_type": "movie",
           "catalog_type": "movie",
           "poster_status": "accepted",
-          "backdrop_status": "accepted",
+          "backdrop_status": "embedded black borders/background detected (left/right black bands 22%/14%, top/bottom black bands 17%/14%)",
           "backdrop_source_host": "image.tmdb.org",
           "backdrop_source_dimensions": [
             3840,
             2160
           ],
-          "status": "processed",
-          "selected_for_hero": false
+          "status": "processed"
         },
         {
           "category": "Trending",
@@ -250,8 +256,14 @@
           "expected_type": "movie",
           "catalog_type": "movie",
           "poster_status": "accepted",
-          "backdrop_status": "duplicate URL or backdrop limit reached",
-          "status": "processed"
+          "backdrop_status": "accepted",
+          "backdrop_source_host": "image.tmdb.org",
+          "backdrop_source_dimensions": [
+            3840,
+            2160
+          ],
+          "status": "processed",
+          "selected_for_hero": false
         },
         {
           "category": "Trending",
@@ -367,14 +379,13 @@
           "expected_type": "movie",
           "catalog_type": "movie",
           "poster_status": "accepted",
-          "backdrop_status": "accepted",
+          "backdrop_status": "embedded black borders/background detected (left/right black bands 22%/14%, top/bottom black bands 17%/14%)",
           "backdrop_source_host": "image.tmdb.org",
           "backdrop_source_dimensions": [
             3840,
             2160
           ],
-          "status": "processed",
-          "selected_for_hero": false
+          "status": "processed"
         },
         {
           "category": "Popular",
@@ -520,8 +531,14 @@
           "expected_type": "movie",
           "catalog_type": "movie",
           "poster_status": "accepted",
-          "backdrop_status": "duplicate URL or backdrop limit reached",
-          "status": "processed"
+          "backdrop_status": "accepted",
+          "backdrop_source_host": "image.tmdb.org",
+          "backdrop_source_dimensions": [
+            3840,
+            2160
+          ],
+          "status": "processed",
+          "selected_for_hero": false
         },
         {
           "category": "Popular",
@@ -560,9 +577,9 @@
     },
     "Latest Releases": {
       "selected_hero": {
-        "title": "Gentle Monster",
+        "title": "A Talent for Murder",
         "type": "movie",
-        "item_id": "tt37020296",
+        "item_id": "tt14129116",
         "catalog_id": "mdblist.207268",
         "source_host": "image.tmdb.org",
         "source_dimensions": [
@@ -586,14 +603,13 @@
           "expected_type": "movie",
           "catalog_type": "movie",
           "poster_status": "accepted",
-          "backdrop_status": "accepted",
+          "backdrop_status": "embedded black borders/background detected (left/right black bands 21%/23%)",
           "backdrop_source_host": "image.tmdb.org",
           "backdrop_source_dimensions": [
             3840,
             2160
           ],
-          "status": "processed",
-          "selected_for_hero": true
+          "status": "processed"
         },
         {
           "category": "Latest Releases",
@@ -610,7 +626,7 @@
             2160
           ],
           "status": "processed",
-          "selected_for_hero": false
+          "selected_for_hero": true
         },
         {
           "category": "Latest Releases",
@@ -806,8 +822,14 @@
           "expected_type": "movie",
           "catalog_type": "movie",
           "poster_status": "accepted",
-          "backdrop_status": "duplicate URL or backdrop limit reached",
-          "status": "processed"
+          "backdrop_status": "accepted",
+          "backdrop_source_host": "image.tmdb.org",
+          "backdrop_source_dimensions": [
+            1920,
+            1080
+          ],
+          "status": "processed",
+          "selected_for_hero": false
         },
         {
           "category": "Latest Releases",
@@ -835,9 +857,9 @@
     },
     "Top Rated": {
       "selected_hero": {
-        "title": "The Godfather",
+        "title": "The Lord of the Rings: The Return of the King",
         "type": "movie",
-        "item_id": "tt0068646",
+        "item_id": "tt0167260",
         "catalog_id": "mdblist.207276",
         "source_host": "image.tmdb.org",
         "source_dimensions": [
@@ -878,14 +900,13 @@
           "expected_type": "movie",
           "catalog_type": "movie",
           "poster_status": "accepted",
-          "backdrop_status": "accepted",
+          "backdrop_status": "embedded black borders/background detected (left/right black bands 30%/29%, top/bottom black bands 3%/10%)",
           "backdrop_source_host": "image.tmdb.org",
           "backdrop_source_dimensions": [
             3840,
             2160
           ],
-          "status": "processed",
-          "selected_for_hero": true
+          "status": "processed"
         },
         {
           "category": "Top Rated",
@@ -936,7 +957,7 @@
             2160
           ],
           "status": "processed",
-          "selected_for_hero": false
+          "selected_for_hero": true
         },
         {
           "category": "Top Rated",
@@ -1065,8 +1086,14 @@
           "expected_type": "movie",
           "catalog_type": "movie",
           "poster_status": "accepted",
-          "backdrop_status": "duplicate URL or backdrop limit reached",
-          "status": "processed"
+          "backdrop_status": "accepted",
+          "backdrop_source_host": "image.tmdb.org",
+          "backdrop_source_dimensions": [
+            3840,
+            2160
+          ],
+          "status": "processed",
+          "selected_for_hero": false
         },
         {
           "category": "Top Rated",
@@ -1126,23 +1153,6 @@
         {
           "category": "For You",
           "catalog_id": "aicat_list_203374",
-          "title": "Paradise Lost 3: Purgatory",
-          "item_id": "tt2028530",
-          "expected_type": "movie",
-          "catalog_type": "movie",
-          "poster_status": "accepted",
-          "backdrop_status": "accepted",
-          "backdrop_source_host": "image.tmdb.org",
-          "backdrop_source_dimensions": [
-            1920,
-            1080
-          ],
-          "status": "processed",
-          "selected_for_hero": false
-        },
-        {
-          "category": "For You",
-          "catalog_id": "aicat_list_203374",
           "title": "We Will Dance Again",
           "item_id": "tt31556612",
           "expected_type": "movie",
@@ -1160,6 +1170,23 @@
         {
           "category": "For You",
           "catalog_id": "aicat_list_203374",
+          "title": "Minding the Gap",
+          "item_id": "tt7476236",
+          "expected_type": "movie",
+          "catalog_type": "movie",
+          "poster_status": "accepted",
+          "backdrop_status": "accepted",
+          "backdrop_source_host": "image.tmdb.org",
+          "backdrop_source_dimensions": [
+            3840,
+            2160
+          ],
+          "status": "processed",
+          "selected_for_hero": false
+        },
+        {
+          "category": "For You",
+          "catalog_id": "aicat_list_203374",
           "title": "Iron Maiden: Burning Ambition",
           "item_id": "tt36163614",
           "expected_type": "movie",
@@ -1170,6 +1197,74 @@
           "backdrop_source_dimensions": [
             1920,
             1080
+          ],
+          "status": "processed",
+          "selected_for_hero": false
+        },
+        {
+          "category": "For You",
+          "catalog_id": "aicat_list_203374",
+          "title": "Tower",
+          "item_id": "tt5116410",
+          "expected_type": "movie",
+          "catalog_type": "movie",
+          "poster_status": "accepted",
+          "backdrop_status": "accepted",
+          "backdrop_source_host": "image.tmdb.org",
+          "backdrop_source_dimensions": [
+            1920,
+            1080
+          ],
+          "status": "processed",
+          "selected_for_hero": false
+        },
+        {
+          "category": "For You",
+          "catalog_id": "aicat_list_203374",
+          "title": "Won't You Be My Neighbor?",
+          "item_id": "tt7681902",
+          "expected_type": "movie",
+          "catalog_type": "movie",
+          "poster_status": "accepted",
+          "backdrop_status": "accepted",
+          "backdrop_source_host": "image.tmdb.org",
+          "backdrop_source_dimensions": [
+            3840,
+            2160
+          ],
+          "status": "processed",
+          "selected_for_hero": false
+        },
+        {
+          "category": "For You",
+          "catalog_id": "aicat_list_203374",
+          "title": "You Can See Everything",
+          "item_id": "tt45368240",
+          "expected_type": "movie",
+          "catalog_type": "movie",
+          "poster_status": "accepted",
+          "backdrop_status": "accepted",
+          "backdrop_source_host": "image.tmdb.org",
+          "backdrop_source_dimensions": [
+            3840,
+            2160
+          ],
+          "status": "processed",
+          "selected_for_hero": false
+        },
+        {
+          "category": "For You",
+          "catalog_id": "aicat_list_203374",
+          "title": "Athlete A",
+          "item_id": "tt11905462",
+          "expected_type": "movie",
+          "catalog_type": "movie",
+          "poster_status": "accepted",
+          "backdrop_status": "accepted",
+          "backdrop_source_host": "image.tmdb.org",
+          "backdrop_source_dimensions": [
+            2048,
+            1152
           ],
           "status": "processed",
           "selected_for_hero": false
@@ -1194,24 +1289,41 @@
         {
           "category": "For You",
           "catalog_id": "aicat_list_203374",
-          "title": "My Mom Jayne",
-          "item_id": "tt36464353",
+          "title": "Cartel Land",
+          "item_id": "tt4126304",
           "expected_type": "movie",
           "catalog_type": "movie",
           "poster_status": "accepted",
-          "backdrop_status": "too small; requires at least 1920x1080",
+          "backdrop_status": "accepted",
           "backdrop_source_host": "image.tmdb.org",
           "backdrop_source_dimensions": [
-            1283,
-            722
+            1920,
+            1080
+          ],
+          "status": "processed",
+          "selected_for_hero": false
+        },
+        {
+          "category": "For You",
+          "catalog_id": "aicat_list_203374",
+          "title": "The Punisher: One Last Kill",
+          "item_id": "tt36042156",
+          "expected_type": "movie",
+          "catalog_type": "movie",
+          "poster_status": "accepted",
+          "backdrop_status": "embedded black borders/background detected (left/right black bands 28%/28%)",
+          "backdrop_source_host": "image.tmdb.org",
+          "backdrop_source_dimensions": [
+            2276,
+            1280
           ],
           "status": "processed"
         },
         {
           "category": "For You",
           "catalog_id": "aicat_list_203374",
-          "title": "Roofman",
-          "item_id": "tt4627382",
+          "title": "Prisoners",
+          "item_id": "tt1392214",
           "expected_type": "movie",
           "catalog_type": "movie",
           "poster_status": "accepted",
@@ -1227,8 +1339,8 @@
         {
           "category": "For You",
           "catalog_id": "aicat_list_203374",
-          "title": "Tickled",
-          "item_id": "tt5278506",
+          "title": "Into the Abyss",
+          "item_id": "tt1972663",
           "expected_type": "movie",
           "catalog_type": "movie",
           "poster_status": "accepted",
@@ -1244,16 +1356,16 @@
         {
           "category": "For You",
           "catalog_id": "aicat_list_203374",
-          "title": "Tell Me Who I Am",
-          "item_id": "tt10915286",
+          "title": "Louis Theroux: Inside the Manosphere",
+          "item_id": "tt39792948",
           "expected_type": "movie",
           "catalog_type": "movie",
           "poster_status": "accepted",
           "backdrop_status": "accepted",
           "backdrop_source_host": "image.tmdb.org",
           "backdrop_source_dimensions": [
-            2048,
-            1152
+            2400,
+            1350
           ],
           "status": "processed",
           "selected_for_hero": false
@@ -1261,93 +1373,8 @@
         {
           "category": "For You",
           "catalog_id": "aicat_list_203374",
-          "title": "Deliver Us from Evil",
-          "item_id": "tt0814075",
-          "expected_type": "movie",
-          "catalog_type": "movie",
-          "poster_status": "accepted",
-          "backdrop_status": "accepted",
-          "backdrop_source_host": "image.tmdb.org",
-          "backdrop_source_dimensions": [
-            3840,
-            2160
-          ],
-          "status": "processed",
-          "selected_for_hero": false
-        },
-        {
-          "category": "For You",
-          "catalog_id": "aicat_list_203374",
-          "title": "Alpha Dog",
-          "item_id": "tt0426883",
-          "expected_type": "movie",
-          "catalog_type": "movie",
-          "poster_status": "accepted",
-          "backdrop_status": "accepted",
-          "backdrop_source_host": "image.tmdb.org",
-          "backdrop_source_dimensions": [
-            3840,
-            2160
-          ],
-          "status": "processed",
-          "selected_for_hero": false
-        },
-        {
-          "category": "For You",
-          "catalog_id": "aicat_list_203374",
-          "title": "Wake Up Dead Man",
-          "item_id": "tt14364480",
-          "expected_type": "movie",
-          "catalog_type": "movie",
-          "poster_status": "accepted",
-          "backdrop_status": "accepted",
-          "backdrop_source_host": "image.tmdb.org",
-          "backdrop_source_dimensions": [
-            3840,
-            2160
-          ],
-          "status": "processed",
-          "selected_for_hero": false
-        },
-        {
-          "category": "For You",
-          "catalog_id": "aicat_list_203374",
-          "title": "Before the Devil Knows You're Dead",
-          "item_id": "tt0292963",
-          "expected_type": "movie",
-          "catalog_type": "movie",
-          "poster_status": "accepted",
-          "backdrop_status": "accepted",
-          "backdrop_source_host": "image.tmdb.org",
-          "backdrop_source_dimensions": [
-            1920,
-            1080
-          ],
-          "status": "processed",
-          "selected_for_hero": false
-        },
-        {
-          "category": "For You",
-          "catalog_id": "aicat_list_203374",
-          "title": "Collective",
-          "item_id": "tt10706602",
-          "expected_type": "movie",
-          "catalog_type": "movie",
-          "poster_status": "accepted",
-          "backdrop_status": "accepted",
-          "backdrop_source_host": "image.tmdb.org",
-          "backdrop_source_dimensions": [
-            3840,
-            2160
-          ],
-          "status": "processed",
-          "selected_for_hero": false
-        },
-        {
-          "category": "For You",
-          "catalog_id": "aicat_list_203374",
-          "title": "Wicked Little Letters",
-          "item_id": "tt20234774",
+          "title": "The Devil All the Time",
+          "item_id": "tt7395114",
           "expected_type": "movie",
           "catalog_type": "movie",
           "poster_status": "accepted",
@@ -1357,8 +1384,8 @@
         {
           "category": "For You",
           "catalog_id": "aicat_list_203374",
-          "title": "Exit Through the Gift Shop",
-          "item_id": "tt1587707",
+          "title": "Bugonia",
+          "item_id": "tt12300742",
           "expected_type": "movie",
           "catalog_type": "movie",
           "poster_status": "accepted",
@@ -1368,8 +1395,8 @@
         {
           "category": "For You",
           "catalog_id": "aicat_list_203375",
-          "title": "Black Rabbit",
-          "item_id": "tt23055142",
+          "title": "Killer Inside: The Mind of Aaron Hernandez",
+          "item_id": "tt11475228",
           "expected_type": "series",
           "catalog_type": "series",
           "poster_status": "not_checked",
@@ -1379,8 +1406,8 @@
         {
           "category": "For You",
           "catalog_id": "aicat_list_203376",
-          "title": "The Widower: 'Til Death Do Us Part",
-          "item_id": "tt44568097",
+          "title": "A Toxic Love Story",
+          "item_id": "tt43619305",
           "expected_type": "movie",
           "catalog_type": "movie",
           "poster_status": "not_checked",
