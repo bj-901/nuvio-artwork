@@ -1,20 +1,14 @@
-Nuvio randomized Discover artwork generator update
+Nuvio Discover Native-Resolution Backdrop Update
 
-This update replaces only:
-  scripts/generate_discover_backdrops.py
+Replace this file in your repository:
+scripts/generate_discover_backdrops.py
 
-It keeps the existing category IDs, output paths, 4K backdrop size (3840x2160),
-cover size (1536x864), workflow file, secrets, and separate white serif logos.
+The updated generator:
+- Requires hero source images to be at least 1920x1080.
+- Selects the highest-resolution available source per category.
+- Never enlarges a hero backdrop; native 4K sources remain 3840x2160.
+- Outputs 1440p/1080p at their actual source dimensions when those are the best available.
+- Removes aggressive sharpening and reduces color/contrast processing to help avoid emphasizing grain.
+- Logs source dimensions, whether the source is native 4K, and final output dimensions.
 
-Install:
-1. Extract this ZIP into D:\GitHub\nuvio-artwork, preserving folder paths.
-2. Allow it to replace scripts\generate_discover_backdrops.py.
-3. In GitHub Desktop, review the one changed file.
-4. Commit and push the update.
-5. Run Actions > Regenerate Nuvio Discover Artwork > Run workflow.
-
-Each run shuffles catalog order and item selection, chooses among the highest-
-resolution available backdrop scenes, and varies the cover layout. Source images
-are still required to meet the existing minimum backdrop dimensions. Randomized
-selection cannot guarantee a different result if the catalog supplies too few
-unique usable images.
+No workflow YAML, catalog IDs, GitHub secrets, folder paths, or Nuvio image URLs need to change.

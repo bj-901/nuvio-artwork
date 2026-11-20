@@ -23,12 +23,13 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DISCOVER_DIR = REPO_ROOT / "Discover"
 
 COVER_SIZE = (1536, 864)
-BACKDROP_SIZE = (3840, 2160)  # Native 4K UHD output for large TVs
+MAX_BACKDROP_SIZE = (3840, 2160)  # Never enlarge a backdrop beyond its source resolution
+MIN_BACKDROP_SIZE = (1920, 1080)  # Reject smaller hero sources to avoid visibly soft TV artwork
 MAX_ITEMS_PER_CATALOG = 30
-MAX_POSTERS = 30
-MAX_BACKDROPS = 18
+MAX_POSTERS = 15
+MAX_BACKDROPS = 12
 TIMEOUT = 25
-USER_AGENT = "Nuvio-Discover-Artwork-Generator/2.2-4K-Randomized"
+USER_AGENT = "Nuvio-Discover-Artwork-Generator/2.2-Native-Resolution"
 
 CATEGORY_CATALOGS = {
     "Trending": [("movie", "mdblist.206584"), ("series", "mdblist.207259")],
@@ -146,17 +147,14 @@ def collect_category_art(category: str, hosts: dict[str, str]) -> tuple[list[Ima
     seen_posters: set[str] = set()
     seen_backdrops: set[str] = set()
 
-    catalog_sources = CATEGORY_CATALOGS[category][:]
-    random.shuffle(catalog_sources)
-    for media_type, catalog_id in catalog_sources:
+    for media_type, catalog_id in CATEGORY_CATALOGS[category]:
         base = hosts.get(catalog_id)
         if not base:
             log(f"  catalog not listed by installed manifests: {catalog_id}")
             continue
         try:
             items = fetch_catalog(base, media_type, catalog_id)
-            random.shuffle(items)
-            log(f"  {catalog_id}: {len(items)} current catalog items (selection shuffled)")
+            log(f"  {catalog_id}: {len(items)} current catalog items")
         except Exception as exc:
             log(f"  catalog failed {catalog_id}: {exc}")
             continue
@@ -186,7 +184,9 @@ def collect_category_art(category: str, hosts: dict[str, str]) -> tuple[list[Ima
 
             if backdrop_url and backdrop_url not in seen_backdrops and len(backdrops) < MAX_BACKDROPS:
                 seen_backdrops.add(backdrop_url)
-                image = download_image(backdrop_url, min_size=(1280, 720))
+                image = download_image(backdrop_url, min_size=MIN_BACKDROP_SIZE)
+                if image:
+                    log(f"    backdrop source: {image.width}x{image.height}")
                 if image:
                     backdrops.append(image)
 
@@ -210,18 +210,21 @@ def build_cover(posters: list[Image.Image], category: str) -> Image.Image:
     if len(posters) < 5:
         raise RuntimeError(f"Only {len(posters)} usable posters for {category}; 5 are required.")
 
-    # Use fresh, non-deterministic poster selection on every workflow run.
-    selected = random.sample(posters, k=len(posters))
+    random.seed(category)
+    # Rotate through the current catalog ordering so each scheduled run can produce a new mix.
+    selected = posters[:]
+    random.shuffle(selected)
     canvas = Image.new("RGBA", COVER_SIZE, (7, 6, 12, 255))
     accent = ACCENTS[category]
 
-    # Rotate between restrained editorial layouts while keeping the same Nuvio style.
-    layouts = [
-        [(52, 180, 250, 505), (278, 105, 285, 655), (535, 42, 466, 780), (948, 105, 285, 655), (1234, 180, 250, 505)],
-        [(40, 130, 270, 600), (285, 205, 250, 500), (535, 35, 466, 790), (1000, 205, 250, 500), (1225, 130, 270, 600)],
-        [(45, 230, 270, 450), (290, 95, 285, 675), (565, 65, 410, 735), (965, 95, 285, 675), (1220, 230, 270, 450)],
+    # Poster windows: a larger center feature, flanked by four smaller cards.
+    specs = [
+        (52, 180, 250, 505),
+        (278, 105, 285, 655),
+        (535, 42, 466, 780),
+        (948, 105, 285, 655),
+        (1234, 180, 250, 505),
     ]
-    specs = random.choice(layouts)
     for idx, (x, y, w, h) in enumerate(specs):
         poster = crop_cover(selected[idx], (w, h))
         poster = ImageEnhance.Color(poster).enhance(0.84)
@@ -268,61 +271,53 @@ def build_cover(posters: list[Image.Image], category: str) -> Image.Image:
     return canvas.convert("RGB")
 
 
-def build_backdrop(backdrops: list[Image.Image], category: str) -> Image.Image:
+def build_backdrop(backdrops: list[Image.Image], category: str) -> tuple[Image.Image, tuple[int, int]]:
     if len(backdrops) < 3:
-        raise RuntimeError(f"Only {len(backdrops)} usable hero backdrops for {category}; 3 are required.")
+        raise RuntimeError(
+            f"Only {len(backdrops)} usable hero backdrops at or above "
+            f"{MIN_BACKDROP_SIZE[0]}x{MIN_BACKDROP_SIZE[1]} for {category}; 3 are required."
+        )
 
-    # Keep source quality high, but rotate among the best available scenes so the
-    # same catalog can still produce a fresh hero on the next scheduled run.
-    ranked = sorted(backdrops, key=lambda image: image.width * image.height, reverse=True)
-    hero_pool = ranked[:min(8, len(ranked))]
-    hero_source = random.choice(hero_pool)
-    support_pool = [image for image in ranked if image is not hero_source]
-    supporting = random.sample(support_pool, k=2)
-    accent = ACCENTS[category]
+    # Prefer the highest-resolution original. Do not upscale a 1080p/1440p
+    # source and label it as native 4K; the output must never exceed source size.
+    chosen = sorted(backdrops, key=lambda image: image.width * image.height, reverse=True)
+    source = chosen[0]
+    source_size = source.size
+    max_w, max_h = MAX_BACKDROP_SIZE
+    scale = min(1.0, max_w / source.width, max_h / source.height)
+    output_size = (
+        max(2, int(source.width * scale) // 2 * 2),
+        max(2, int(source.height * scale) // 2 * 2),
+    )
 
-    hero = ImageOps.fit(hero_source, BACKDROP_SIZE, method=Image.Resampling.LANCZOS, centering=(0.5, 0.45))
-    hero = ImageEnhance.Color(hero).enhance(0.90)
-    hero = ImageEnhance.Contrast(hero).enhance(1.06)
-    # Careful output sharpening compensates for resize softness without halos.
-    hero = hero.filter(ImageFilter.UnsharpMask(radius=2.2, percent=115, threshold=3))
+    # Fit/crop only when necessary. No enlargement and no artificial sharpening.
+    hero = ImageOps.fit(
+        source,
+        output_size,
+        method=Image.Resampling.LANCZOS,
+        centering=(0.5, 0.45),
+    )
+    hero = ImageEnhance.Color(hero).enhance(0.96)
+    hero = ImageEnhance.Contrast(hero).enhance(1.02)
     canvas = hero.convert("RGBA")
 
-    # Supporting artwork appears only as softly blended edge panels, not a tiled grid.
-    for side, source in (("left", supporting[0]), ("right", supporting[1])):
-        panel_w = 760
-        panel = ImageOps.fit(source, (panel_w, BACKDROP_SIZE[1]), method=Image.Resampling.LANCZOS)
-        panel = ImageEnhance.Color(panel).enhance(0.82)
-        panel = Image.blend(panel, Image.new("RGB", panel.size, accent), 0.07).convert("RGBA")
-        panel.putalpha(62)
-        x = 0 if side == "left" else BACKDROP_SIZE[0] - panel_w
-        canvas.alpha_composite(panel, (x, 0))
-
-    # Violet Platinum color grade.
-    tint = Image.new("RGBA", BACKDROP_SIZE, (*accent, 18))
+    # Restrained Violet Platinum grade; avoid heavy overlays that muddy dark scenes.
+    accent = ACCENTS[category]
+    tint = Image.new("RGBA", output_size, (*accent, 7))
     canvas = Image.alpha_composite(canvas, tint)
 
-    # Soft center gradient preserves visual space for the separate title logo.
-    gradient = Image.new("RGBA", BACKDROP_SIZE, (0, 0, 0, 0))
-    gd = ImageDraw.Draw(gradient)
-    gd.rectangle((420, 500, 3420, 1700), fill=(4, 3, 10, 36))
-    gradient = gradient.filter(ImageFilter.GaussianBlur(210))
-    canvas = Image.alpha_composite(canvas, gradient)
-
-    # Gentle cinematic vignette.
-    vignette = Image.new("L", BACKDROP_SIZE, 0)
+    # Very subtle vignette, scaled to the actual output dimensions.
+    w, h = output_size
+    vignette = Image.new("L", output_size, 0)
     vd = ImageDraw.Draw(vignette)
-    vd.ellipse((-180, -120, BACKDROP_SIZE[0] + 180, BACKDROP_SIZE[1] + 120), fill=190)
-    vignette = vignette.filter(ImageFilter.GaussianBlur(175))
-    alpha = Image.eval(vignette, lambda p: max(0, min(78, 78 - int(p * 0.32))))
-    dark = Image.new("RGBA", BACKDROP_SIZE, (0, 0, 0, 0))
+    vd.ellipse((-int(w * 0.05), -int(h * 0.05), int(w * 1.05), int(h * 1.05)), fill=210)
+    vignette = vignette.filter(ImageFilter.GaussianBlur(max(24, int(w * 0.035))))
+    alpha = Image.eval(vignette, lambda value: max(0, min(34, 34 - int(value * 0.16))))
+    dark = Image.new("RGBA", output_size, (0, 0, 0, 0))
     dark.putalpha(alpha)
     canvas = Image.alpha_composite(canvas, dark)
 
-    # Final subtle sharpening after compositing; preserve real source detail.
-    final = canvas.convert("RGB")
-    final = final.filter(ImageFilter.UnsharpMask(radius=1.6, percent=85, threshold=4))
-    return final
+    return canvas.convert("RGB"), source_size
 
 
 def save_webp(image: Image.Image, destination: Path) -> None:
@@ -344,9 +339,9 @@ def main() -> int:
         try:
             posters, backdrops = collect_category_art(category, hosts)
             log(f"  usable posters: {len(posters)}")
-            log(f"  usable hero backdrops (minimum 1280x720 source): {len(backdrops)}")
+            log(f"  usable hero backdrops (minimum {MIN_BACKDROP_SIZE[0]}x{MIN_BACKDROP_SIZE[1]} source): {len(backdrops)}")
             cover = build_cover(posters, category)
-            hero = build_backdrop(backdrops, category)
+            hero, source_size = build_backdrop(backdrops, category)
 
             cover_path = DISCOVER_DIR / category / "Cover" / "cover.webp"
             backdrop_path = DISCOVER_DIR / category / "Backdrop" / "backdrop.webp"
@@ -360,7 +355,10 @@ def main() -> int:
 
             updated.append(category)
             log(f"  Wrote {cover_path.relative_to(REPO_ROOT)}")
-            log(f"  Wrote {backdrop_path.relative_to(REPO_ROOT)} ({BACKDROP_SIZE[0]}x{BACKDROP_SIZE[1]} 4K UHD; randomized hero/layout)")
+            output_size = hero.size
+            quality_label = "native 4K source" if source_size[0] >= 3840 and source_size[1] >= 2160 else "high-resolution source; not native 4K"
+            log(f"  Backdrop source: {source_size[0]}x{source_size[1]} ({quality_label})")
+            log(f"  Wrote {backdrop_path.relative_to(REPO_ROOT)} ({output_size[0]}x{output_size[1]} output; no upscaling)")
             log(f"  Kept separate logo: {logo_path.relative_to(REPO_ROOT)}")
         except Exception as exc:
             failures.append((category, str(exc)))
