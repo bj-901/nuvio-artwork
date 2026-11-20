@@ -13,6 +13,8 @@ from __future__ import annotations
 import io
 import os
 import random
+import json
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -28,8 +30,10 @@ MIN_BACKDROP_SIZE = (1920, 1080)  # Reject smaller hero sources to avoid visibly
 MAX_ITEMS_PER_CATALOG = 30
 MAX_POSTERS = 15
 MAX_BACKDROPS = 12
+MIN_BACKDROP_ASPECT = 1.50  # Reject portrait/square promotional artwork as hero images
 TIMEOUT = 25
-USER_AGENT = "Nuvio-Discover-Artwork-Generator/2.2-Native-Resolution"
+USER_AGENT = "Nuvio-Discover-Artwork-Generator/2.3-Audited"
+AUDIT_PATH = DISCOVER_DIR / "artwork-audit.json"
 
 CATEGORY_CATALOGS = {
     "Trending": [("movie", "mdblist.206584"), ("series", "mdblist.207259")],
@@ -141,9 +145,28 @@ def download_image(url: str, min_size=(250, 250)) -> Image.Image | None:
         return None
 
 
-def collect_category_art(category: str, hosts: dict[str, str]) -> tuple[list[Image.Image], list[Image.Image]]:
+def download_backdrop(url: str) -> tuple[Image.Image | None, tuple[int, int] | None, str]:
+    """Download a backdrop and report its original dimensions and validation result."""
+    try:
+        response = SESSION.get(url, timeout=TIMEOUT)
+        response.raise_for_status()
+        with Image.open(io.BytesIO(response.content)) as original:
+            width, height = original.size
+            if width < MIN_BACKDROP_SIZE[0] or height < MIN_BACKDROP_SIZE[1]:
+                return None, (width, height), f"too small; requires at least {MIN_BACKDROP_SIZE[0]}x{MIN_BACKDROP_SIZE[1]}"
+            aspect = width / height
+            if aspect < MIN_BACKDROP_ASPECT:
+                return None, (width, height), f"not a landscape hero image; aspect ratio {aspect:.2f} is below {MIN_BACKDROP_ASPECT:.2f}"
+            image = original.convert("RGB")
+        return image, (width, height), "accepted"
+    except Exception as exc:
+        return None, None, f"download/decode failed: {exc}"
+
+
+def collect_category_art(category: str, hosts: dict[str, str]) -> tuple[list[Image.Image], list[dict], list[dict]]:
     posters: list[Image.Image] = []
-    backdrops: list[Image.Image] = []
+    backdrops: list[dict] = []
+    audit: list[dict] = []
     seen_posters: set[str] = set()
     seen_backdrops: set[str] = set()
 
@@ -151,25 +174,55 @@ def collect_category_art(category: str, hosts: dict[str, str]) -> tuple[list[Ima
         base = hosts.get(catalog_id)
         if not base:
             log(f"  catalog not listed by installed manifests: {catalog_id}")
+            audit.append({"category": category, "catalog_id": catalog_id, "expected_type": media_type,
+                          "status": "catalog_missing", "reason": "catalog ID not found in configured manifests"})
             continue
         try:
             items = fetch_catalog(base, media_type, catalog_id)
             log(f"  {catalog_id}: {len(items)} current catalog items")
         except Exception as exc:
             log(f"  catalog failed {catalog_id}: {exc}")
+            audit.append({"category": category, "catalog_id": catalog_id, "expected_type": media_type,
+                          "status": "catalog_failed", "reason": str(exc)})
             continue
 
         for item in items:
             meta = {}
+            item_id = str(item.get("id") or "")
+            title = str(item.get("name") or item.get("title") or "Unknown title").strip()
+            actual_type = str(item.get("type") or media_type).lower()
+            entry = {"category": category, "catalog_id": catalog_id, "title": title,
+                     "item_id": item_id, "expected_type": media_type, "catalog_type": actual_type,
+                     "poster_status": "not_checked", "backdrop_status": "not_checked"}
+
+            # A catalog route is not enough if the item itself explicitly identifies another media type.
+            if actual_type not in ("movie", "series") or actual_type != media_type:
+                entry.update({"status": "rejected", "reason": f"media type mismatch or unsupported type: {actual_type}"})
+                audit.append(entry)
+                log(f"  rejected {title}: {entry['reason']}")
+                continue
+
             poster_url = valid_http_url(item.get("poster"))
             backdrop_url = valid_http_url(item.get("background") or item.get("landscape"))
 
-            # Resolve missing poster/background URLs from the add-on metadata endpoint.
-            if (not poster_url or not backdrop_url) and item.get("id"):
+            # Resolve missing poster/background URLs and authoritative type/title from metadata.
+            if (not poster_url or not backdrop_url or not item.get("type")) and item_id:
                 try:
-                    meta = fetch_meta(base, media_type, str(item["id"]))
+                    meta = fetch_meta(base, media_type, item_id)
                 except Exception as exc:
-                    log(f"  metadata skipped for {item.get('name', item.get('id'))}: {exc}")
+                    entry["metadata_warning"] = str(exc)
+                    log(f"  metadata skipped for {title}: {exc}")
+
+            meta_type = str(meta.get("type") or actual_type).lower()
+            if meta_type not in ("movie", "series") or meta_type != media_type:
+                entry.update({"catalog_type": meta_type, "status": "rejected",
+                              "reason": f"metadata media type mismatch or unsupported type: {meta_type}"})
+                audit.append(entry)
+                log(f"  rejected {title}: {entry['reason']}")
+                continue
+            if meta.get("name") or meta.get("title"):
+                title = str(meta.get("name") or meta.get("title")).strip()
+                entry["title"] = title
 
             if not poster_url:
                 poster_url = valid_http_url(meta.get("poster"))
@@ -181,19 +234,36 @@ def collect_category_art(category: str, hosts: dict[str, str]) -> tuple[list[Ima
                 image = download_image(poster_url, min_size=(180, 260))
                 if image:
                     posters.append(image)
+                    entry["poster_status"] = "accepted"
+                else:
+                    entry["poster_status"] = "rejected: unavailable or too small"
 
             if backdrop_url and backdrop_url not in seen_backdrops and len(backdrops) < MAX_BACKDROPS:
                 seen_backdrops.add(backdrop_url)
-                image = download_image(backdrop_url, min_size=MIN_BACKDROP_SIZE)
+                image, dimensions, reason = download_backdrop(backdrop_url)
+                parsed = urlparse(backdrop_url)
+                entry["backdrop_source_host"] = parsed.netloc
+                entry["backdrop_source_dimensions"] = list(dimensions) if dimensions else None
+                entry["backdrop_status"] = reason
                 if image:
-                    log(f"    backdrop source: {image.width}x{image.height}")
-                if image:
-                    backdrops.append(image)
+                    backdrops.append({"image": image, "title": title, "type": media_type,
+                                      "item_id": item_id, "catalog_id": catalog_id,
+                                      "source_dimensions": dimensions, "source_host": parsed.netloc})
+                    log(f"    accepted backdrop: {title} ({media_type}) {dimensions[0]}x{dimensions[1]}")
+                else:
+                    log(f"    rejected backdrop: {title} ({media_type}) — {reason}")
+            elif not backdrop_url:
+                entry["backdrop_status"] = "no background/landscape URL supplied"
+            else:
+                entry["backdrop_status"] = "duplicate URL or backdrop limit reached"
+
+            entry["status"] = "processed"
+            audit.append(entry)
 
             if len(posters) >= MAX_POSTERS and len(backdrops) >= MAX_BACKDROPS:
                 break
 
-    return posters, backdrops
+    return posters, backdrops, audit
 
 
 def crop_cover(img: Image.Image, size: tuple[int, int]) -> Image.Image:
@@ -271,7 +341,7 @@ def build_cover(posters: list[Image.Image], category: str) -> Image.Image:
     return canvas.convert("RGB")
 
 
-def build_backdrop(backdrops: list[Image.Image], category: str) -> tuple[Image.Image, tuple[int, int]]:
+def build_backdrop(backdrops: list[dict], category: str) -> tuple[Image.Image, dict]:
     if len(backdrops) < 3:
         raise RuntimeError(
             f"Only {len(backdrops)} usable hero backdrops at or above "
@@ -280,8 +350,9 @@ def build_backdrop(backdrops: list[Image.Image], category: str) -> tuple[Image.I
 
     # Prefer the highest-resolution original. Do not upscale a 1080p/1440p
     # source and label it as native 4K; the output must never exceed source size.
-    chosen = sorted(backdrops, key=lambda image: image.width * image.height, reverse=True)
-    source = chosen[0]
+    chosen = sorted(backdrops, key=lambda item: item["image"].width * item["image"].height, reverse=True)
+    selected = chosen[0]
+    source = selected["image"]
     source_size = source.size
     max_w, max_h = MAX_BACKDROP_SIZE
     scale = min(1.0, max_w / source.width, max_h / source.height)
@@ -317,7 +388,7 @@ def build_backdrop(backdrops: list[Image.Image], category: str) -> tuple[Image.I
     dark.putalpha(alpha)
     canvas = Image.alpha_composite(canvas, dark)
 
-    return canvas.convert("RGB"), source_size
+    return canvas.convert("RGB"), selected
 
 
 def save_webp(image: Image.Image, destination: Path) -> None:
@@ -334,36 +405,75 @@ def main() -> int:
 
     updated = []
     failures = []
+    audit_report = {
+        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+        "generator_version": "2.3-Audited",
+        "rules": {
+            "allowed_media_types": ["movie", "series"],
+            "minimum_backdrop_dimensions": list(MIN_BACKDROP_SIZE),
+            "minimum_backdrop_aspect_ratio": MIN_BACKDROP_ASPECT,
+            "maximum_output_dimensions": list(MAX_BACKDROP_SIZE),
+            "upscaling": False,
+        },
+        "categories": {},
+    }
+
     for category in CATEGORY_CATALOGS:
         log(f"\n=== {category} ===")
+        category_audit = []
         try:
-            posters, backdrops = collect_category_art(category, hosts)
+            posters, backdrops, category_audit = collect_category_art(category, hosts)
             log(f"  usable posters: {len(posters)}")
-            log(f"  usable hero backdrops (minimum {MIN_BACKDROP_SIZE[0]}x{MIN_BACKDROP_SIZE[1]} source): {len(backdrops)}")
+            log(f"  usable hero backdrops: {len(backdrops)}")
             cover = build_cover(posters, category)
-            hero, source_size = build_backdrop(backdrops, category)
+            hero, selected = build_backdrop(backdrops, category)
 
             cover_path = DISCOVER_DIR / category / "Cover" / "cover.webp"
             backdrop_path = DISCOVER_DIR / category / "Backdrop" / "backdrop.webp"
             save_webp(cover, cover_path)
             save_webp(hero, backdrop_path)
 
-            # Logos are stable typography and are installed separately, not regenerated from posters.
             logo_path = DISCOVER_DIR / category / "Logo" / "logo.webp"
             if not logo_path.exists():
                 raise RuntimeError(f"Separate logo is missing: {logo_path.relative_to(REPO_ROOT)}")
 
+            selected_record = {
+                "title": selected["title"],
+                "type": selected["type"],
+                "item_id": selected["item_id"],
+                "catalog_id": selected["catalog_id"],
+                "source_host": selected["source_host"],
+                "source_dimensions": list(selected["source_dimensions"]),
+                "output_dimensions": list(hero.size),
+                "native_4k_source": selected["source_dimensions"][0] >= 3840 and selected["source_dimensions"][1] >= 2160,
+            }
+            for record in category_audit:
+                if record.get("title") == selected["title"] and record.get("item_id") == selected["item_id"]:
+                    record["selected_for_hero"] = True
+                elif "backdrop_status" in record and record.get("backdrop_status") == "accepted":
+                    record["selected_for_hero"] = False
+            audit_report["categories"][category] = {
+                "selected_hero": selected_record,
+                "usable_backdrop_count": len(backdrops),
+                "usable_poster_count": len(posters),
+                "items": category_audit,
+            }
+
             updated.append(category)
-            log(f"  Wrote {cover_path.relative_to(REPO_ROOT)}")
-            output_size = hero.size
-            quality_label = "native 4K source" if source_size[0] >= 3840 and source_size[1] >= 2160 else "high-resolution source; not native 4K"
-            log(f"  Backdrop source: {source_size[0]}x{source_size[1]} ({quality_label})")
-            log(f"  Wrote {backdrop_path.relative_to(REPO_ROOT)} ({output_size[0]}x{output_size[1]} output; no upscaling)")
+            log(f"  SELECTED HERO: {selected['title']} ({selected['type']})")
+            log(f"  Source: {selected['source_dimensions'][0]}x{selected['source_dimensions'][1]} from {selected['source_host']}")
+            quality_label = "native 4K source" if selected_record["native_4k_source"] else "not native 4K"
+            log(f"  Output: {hero.size[0]}x{hero.size[1]} ({quality_label}; no upscaling)")
+            log(f"  Wrote {cover_path.relative_to(REPO_ROOT)} and {backdrop_path.relative_to(REPO_ROOT)}")
             log(f"  Kept separate logo: {logo_path.relative_to(REPO_ROOT)}")
         except Exception as exc:
             failures.append((category, str(exc)))
+            audit_report["categories"][category] = {"error": str(exc), "items": category_audit}
             log(f"  ERROR: {exc}")
 
+    AUDIT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    AUDIT_PATH.write_text(json.dumps(audit_report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    log(f"\nAudit report written: {AUDIT_PATH.relative_to(REPO_ROOT)}")
     log("\n=== Summary ===")
     log(f"Updated covers and hero backdrops: {', '.join(updated) if updated else 'none'}")
     if failures:

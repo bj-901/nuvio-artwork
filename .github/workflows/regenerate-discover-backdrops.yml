@@ -62,7 +62,8 @@ jobs:
                     "Discover/Popular/Logo/logo.webp" \
                     "Discover/Latest Releases/Logo/logo.webp" \
                     "Discover/Top Rated/Logo/logo.webp" \
-                    "Discover/For You/Logo/logo.webp"
+                    "Discover/For You/Logo/logo.webp" \
+                    "Discover/artwork-audit.json"
 
             if git diff --cached --quiet; then
               echo "No artwork changes to publish."
